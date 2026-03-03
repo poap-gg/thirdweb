@@ -1,8 +1,7 @@
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { env } from '../config/env';
-import { AppDataSource } from '../config/database';
-import { MagicLink } from '../entities/MagicLink';
+import { store } from './store';
 import type { MagicLinkPayload } from '../shared-types';
 
 const MAGIC_LINK_EXPIRY_HOURS = 24;
@@ -30,9 +29,7 @@ export async function createMagicLink(userId: number, email: string): Promise<st
   const nonce = generateNonce();
   const expiresAt = new Date(Date.now() + MAGIC_LINK_EXPIRY_MS);
 
-  const repo = AppDataSource.getRepository(MagicLink);
-  const link = repo.create({ userId, nonce, expiresAt, used: false });
-  await repo.save(link);
+  store.magicLinks.save({ userId, nonce, expiresAt, used: false });
 
   const token = signMagicLinkToken({ userId, email, nonce });
   const url = `${env.NEXT_PUBLIC_APP_URL}/auth/verify?token=${encodeURIComponent(token)}`;
@@ -45,13 +42,11 @@ export async function consumeMagicLink(
   const payload = verifyMagicLinkToken(token);
   if (!payload) return null;
 
-  const repo = AppDataSource.getRepository(MagicLink);
-  const link = await repo.findOne({ where: { nonce: payload.nonce, used: false } });
+  const link = store.magicLinks.findUnusedByNonce(payload.nonce);
   if (!link) return null;
   if (link.expiresAt < new Date()) return null;
 
-  link.used = true;
-  await repo.save(link);
+  store.magicLinks.save({ ...link, used: true });
 
   return { userId: payload.userId, email: payload.email };
 }

@@ -1,9 +1,6 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import { AppDataSource } from '../../../config/database';
-import { User } from '../../../entities/User';
-import { Attendance } from '../../../entities/Attendance';
-import { Event } from '../../../entities/Event';
+import { store } from '../../../lib/store';
 import { encodeId, decodeId } from '../../../lib/hashids';
 import { sendSuccess, sendNotFound, sendInternalError, sendValidationError } from '../../../lib/response';
 import type { PublicProfile, PublicEventHistory } from '../../../shared-types';
@@ -23,37 +20,30 @@ router.get('/:id', async (req: Request, res: Response) => {
       return;
     }
 
-    const userRepo = AppDataSource.getRepository(User);
-    const attendRepo = AppDataSource.getRepository(Attendance);
-
-    const user = await userRepo.findOne({ where: { id: userId } });
+    const user = store.users.findById(userId);
     if (!user) {
       sendNotFound(res, 'Profile not found');
       return;
     }
 
-    const { count } = await userRepo
-      .createQueryBuilder('u')
-      .select('COUNT(*)', 'count')
-      .where('u.points > :points', { points: user.points })
-      .getRawOne<{ count: string }>();
-    const rank = parseInt(count, 10) + 1;
+    const rank = store.users.countWithMorePointsThan(user.points) + 1;
 
-    const attendances = await attendRepo
-      .createQueryBuilder('a')
-      .innerJoinAndSelect('a.event', 'e')
-      .where('a.user_id = :userId', { userId })
-      .andWhere('a.checked_in = true')
-      .orderBy('e.event_date', 'DESC')
-      .getMany();
-
-    const events: PublicEventHistory[] = attendances.map((a) => ({
-      eventId: encodeId(a.eventId),
-      eventName: (a.event as Event).name,
-      eventDate: ((a.event as Event).eventDate ?? a.createdAt).toISOString(),
-      pointsAwarded: a.pointsAwarded,
-      checkedIn: a.checkedIn,
-    }));
+    const events: PublicEventHistory[] = store.attendances
+      .findByUser(userId)
+      .filter((a) => a.checkedIn)
+      .map((a) => {
+        const event = store.events.findById(a.eventId);
+        if (!event) return null;
+        return {
+          eventId: encodeId(a.eventId),
+          eventName: event.name,
+          eventDate: (event.eventDate ?? a.createdAt).toISOString(),
+          pointsAwarded: a.pointsAwarded,
+          checkedIn: a.checkedIn,
+        };
+      })
+      .filter((e): e is PublicEventHistory => e !== null)
+      .sort((a, b) => new Date(b.eventDate).getTime() - new Date(a.eventDate).getTime());
 
     const profile: PublicProfile = {
       id: encodeId(user.id),

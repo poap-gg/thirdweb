@@ -1,43 +1,39 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { requireAuth, getActingUser } from '../../../middleware/auth';
-import { AppDataSource } from '../../../config/database';
-import { User } from '../../../entities/User';
-import { Attendance } from '../../../entities/Attendance';
-import { Event } from '../../../entities/Event';
+import { store } from '../../../lib/store';
 import { encodeId } from '../../../lib/hashids';
 import { getCachedUser, setCachedUser } from '../../../lib/cache';
 import {
   sendSuccess,
   sendNotFound,
   sendInternalError,
-  sendUnauthorized,
 } from '../../../lib/response';
 import type { PublicUser, PublicEventHistory, CachedUserData } from '../../../shared-types';
 
 const router = Router();
 
-async function buildUserData(userId: number): Promise<CachedUserData | null> {
-  const userRepo = AppDataSource.getRepository(User);
-  const attendRepo = AppDataSource.getRepository(Attendance);
-
-  const user = await userRepo.findOne({ where: { id: userId } });
+function buildUserData(userId: number): CachedUserData | null {
+  const user = store.users.findById(userId);
   if (!user) return null;
 
-  // Compute rank: count users with strictly more points
-  const { count } = await userRepo
-    .createQueryBuilder('u')
-    .select('COUNT(*)', 'count')
-    .where('u.points > :points', { points: user.points })
-    .getRawOne<{ count: string }>();
-  const rank = parseInt(count, 10) + 1;
+  const rank = store.users.countWithMorePointsThan(user.points) + 1;
 
-  const attendances = await attendRepo
-    .createQueryBuilder('a')
-    .innerJoinAndSelect('a.event', 'e')
-    .where('a.user_id = :userId', { userId })
-    .orderBy('e.event_date', 'DESC')
-    .getMany();
+  const rawAttendances = store.attendances.findByUser(userId);
+  const events: PublicEventHistory[] = rawAttendances
+    .map((a) => {
+      const event = store.events.findById(a.eventId);
+      if (!event) return null;
+      return {
+        eventId: encodeId(a.eventId),
+        eventName: event.name,
+        eventDate: (event.eventDate ?? a.createdAt).toISOString(),
+        pointsAwarded: a.pointsAwarded,
+        checkedIn: a.checkedIn,
+      };
+    })
+    .filter((e): e is PublicEventHistory => e !== null)
+    .sort((a, b) => new Date(b.eventDate).getTime() - new Date(a.eventDate).getTime());
 
   const publicUser: PublicUser = {
     id: encodeId(user.id),
@@ -47,14 +43,6 @@ async function buildUserData(userId: number): Promise<CachedUserData | null> {
     rank,
     createdAt: user.createdAt.toISOString(),
   };
-
-  const events: PublicEventHistory[] = attendances.map((a) => ({
-    eventId: encodeId(a.eventId),
-    eventName: (a.event as Event).name,
-    eventDate: ((a.event as Event).eventDate ?? a.createdAt).toISOString(),
-    pointsAwarded: a.pointsAwarded,
-    checkedIn: a.checkedIn,
-  }));
 
   return { user: publicUser, events };
 }
@@ -73,7 +61,7 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
       return;
     }
 
-    const data = await buildUserData(userId);
+    const data = buildUserData(userId);
     if (!data) {
       sendNotFound(res, 'User not found');
       return;

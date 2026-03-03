@@ -1,9 +1,8 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { requireAuth, getActingUser } from '../../../middleware/auth';
-import { AppDataSource } from '../../../config/database';
-import { User } from '../../../entities/User';
-import { Event } from '../../../entities/Event';
+import { store } from '../../../lib/store';
+import type { StoreUser } from '../../../lib/store';
 import { encodeId, decodeId } from '../../../lib/hashids';
 import {
   sendSuccess,
@@ -16,13 +15,13 @@ import type { PublicEvent } from '../../../shared-types';
 
 const router = Router();
 
-async function assertAdmin(req: Request, res: Response): Promise<User | null> {
+function assertAdmin(req: Request, res: Response): StoreUser | null {
   const userId = getActingUser(req.session.authId);
   if (!userId) {
     sendUnauthorized(res);
     return null;
   }
-  const user = await AppDataSource.getRepository(User).findOne({ where: { id: userId } });
+  const user = store.users.findById(userId);
   if (!user || !user.isAdmin) {
     sendUnauthorized(res, 'Admin access required');
     return null;
@@ -36,15 +35,10 @@ async function assertAdmin(req: Request, res: Response): Promise<User | null> {
  */
 router.get('/', requireAuth, async (req: Request, res: Response) => {
   try {
-    const admin = await assertAdmin(req, res);
+    const admin = assertAdmin(req, res);
     if (!admin) return;
 
-    const events = await AppDataSource.getRepository(Event)
-      .createQueryBuilder('e')
-      .orderBy('e.created_at', 'DESC')
-      .getMany();
-
-    const result: PublicEvent[] = events.map((e) => ({
+    const result: PublicEvent[] = store.events.listDesc().map((e) => ({
       id: encodeId(e.id),
       name: e.name,
       date: e.eventDate?.toISOString() ?? '',
@@ -60,11 +54,11 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
 
 /**
  * GET /api/admin/events/:id
- * Get a single event with its attendances (admin only).
+ * Get a single event (admin only).
  */
 router.get('/:id', requireAuth, async (req: Request, res: Response) => {
   try {
-    const admin = await assertAdmin(req, res);
+    const admin = assertAdmin(req, res);
     if (!admin) return;
 
     const eventId = decodeId(req.params['id']);
@@ -73,7 +67,7 @@ router.get('/:id', requireAuth, async (req: Request, res: Response) => {
       return;
     }
 
-    const event = await AppDataSource.getRepository(Event).findOne({ where: { id: eventId } });
+    const event = store.events.findById(eventId);
     if (!event) {
       sendNotFound(res, 'Event not found');
       return;

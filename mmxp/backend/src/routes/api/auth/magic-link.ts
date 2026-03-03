@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import { AppDataSource } from '../../../config/database';
-import { User } from '../../../entities/User';
+import { store } from '../../../lib/store';
 import { createMagicLink } from '../../../lib/auth';
 import { sendMagicLinkEmail, sendWelcomeEmail } from '../../../lib/email';
 import { env } from '../../../config/env';
@@ -32,20 +31,18 @@ router.post('/request', async (req: Request, res: Response) => {
     if (!email) return sendMissingField(res, 'email');
 
     const normalized = email.toLowerCase().trim();
-    const repo = AppDataSource.getRepository(User);
-    let user = await repo.findOne({ where: { email: normalized } });
+    let user = store.users.findByEmail(normalized);
     const isNew = !user;
 
     if (env.isDev) {
       // MVP: auto-create the user so any email works
       if (!user) {
-        user = repo.create({
+        user = store.users.save({
           email: normalized,
           name: normalized.split('@')[0],
           points: 0,
           isAdmin: false,
         });
-        await repo.save(user);
       }
 
       const verifyUrl = await createMagicLink(user.id, user.email);
@@ -56,7 +53,6 @@ router.post('/request', async (req: Request, res: Response) => {
 
     // Production: user must exist via CSV upload; send email normally
     if (!user) {
-      // Still return sent:true to avoid email enumeration
       sendSuccess(res, { sent: true });
       return;
     }

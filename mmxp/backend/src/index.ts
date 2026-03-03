@@ -19,14 +19,18 @@ import adminEventsRouter from './routes/api/admin/events';
 import adminUploadRouter from './routes/api/admin/upload';
 
 async function bootstrap(): Promise<void> {
-  // ── Database & Redis ────────────────────────────────────────────────────────
-  console.log('[MMXP] Connecting to database...');
-  await initDatabase();
-  console.log('[MMXP] Database connected');
+  // ── Database & Redis (skipped in dev — in-memory store is used instead) ─────
+  if (!env.isDev) {
+    console.log('[MMXP] Connecting to database...');
+    await initDatabase();
+    console.log('[MMXP] Database connected');
 
-  console.log('[MMXP] Connecting to Redis...');
-  await initRedis();
-  console.log('[MMXP] Redis connected');
+    console.log('[MMXP] Connecting to Redis...');
+    await initRedis();
+    console.log('[MMXP] Redis connected');
+  } else {
+    console.log('[MMXP] Dev mode — using in-memory store (no database or Redis required)');
+  }
 
   // ── Express App ─────────────────────────────────────────────────────────────
   const app = express();

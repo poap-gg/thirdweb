@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
-import { AppDataSource } from '../../../config/database';
-import { User } from '../../../entities/User';
+import { store } from '../../../lib/store';
 import { encodeId } from '../../../lib/hashids';
 import { getCachedLeaderboard, setCachedLeaderboard } from '../../../lib/cache';
 import { sendSuccess, sendInternalError } from '../../../lib/response';
@@ -30,16 +29,7 @@ router.get('/', async (req: Request, res: Response) => {
     }
 
     const offset = (page - 1) * PAGE_SIZE;
-
-    const users = await AppDataSource.getRepository(User)
-      .createQueryBuilder('u')
-      .select(['u.id', 'u.name', 'u.points'])
-      .where('u.points > 0')
-      .orderBy('u.points', 'DESC')
-      .addOrderBy('u.created_at', 'ASC')
-      .skip(offset)
-      .take(PAGE_SIZE)
-      .getMany();
+    const users = store.users.leaderboard(offset, PAGE_SIZE);
 
     const entries: LeaderboardEntry[] = users.map((u, idx) => ({
       rank: offset + idx + 1,

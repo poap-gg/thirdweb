@@ -1,8 +1,7 @@
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import { consumeMagicLink } from '../../../lib/auth';
-import { AppDataSource } from '../../../config/database';
-import { User } from '../../../entities/User';
+import { store } from '../../../lib/store';
 import { sendSuccess, sendError, sendInternalError } from '../../../lib/response';
 import { ErrorCode } from '../../../shared-types';
 
@@ -27,8 +26,7 @@ router.post('/', async (req: Request, res: Response) => {
       return;
     }
 
-    const repo = AppDataSource.getRepository(User);
-    const user = await repo.findOne({ where: { id: result.userId } });
+    const user = store.users.findById(result.userId);
     if (!user) {
       sendError(res, ErrorCode.NOT_FOUND, 'User not found', 404);
       return;

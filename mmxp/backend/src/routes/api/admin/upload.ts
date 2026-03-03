@@ -2,10 +2,8 @@ import { Router } from 'express';
 import type { Request, Response } from 'express';
 import multer from 'multer';
 import { requireAuth, getActingUser } from '../../../middleware/auth';
-import { AppDataSource } from '../../../config/database';
-import { User } from '../../../entities/User';
-import { Event } from '../../../entities/Event';
-import { Attendance } from '../../../entities/Attendance';
+import { store } from '../../../lib/store';
+import type { StoreUser } from '../../../lib/store';
 import { parseLumaCsv } from '../../../lib/csv';
 import { createMagicLink } from '../../../lib/auth';
 import { sendWelcomeEmail, sendMagicLinkEmail } from '../../../lib/email';
@@ -35,13 +33,13 @@ const upload = multer({
   },
 });
 
-async function assertAdmin(req: Request, res: Response): Promise<User | null> {
+function assertAdmin(req: Request, res: Response): StoreUser | null {
   const userId = getActingUser(req.session.authId);
   if (!userId) {
     sendUnauthorized(res);
     return null;
   }
-  const user = await AppDataSource.getRepository(User).findOne({ where: { id: userId } });
+  const user = store.users.findById(userId);
   if (!user || !user.isAdmin) {
     sendUnauthorized(res, 'Admin access required');
     return null;
@@ -62,7 +60,7 @@ router.post(
   upload.single('file'),
   async (req: Request, res: Response) => {
     try {
-      const admin = await assertAdmin(req, res);
+      const admin = assertAdmin(req, res);
       if (!admin) return;
 
       if (!req.file) {
@@ -88,19 +86,14 @@ router.post(
         return;
       }
 
-      const userRepo = AppDataSource.getRepository(User);
-      const eventRepo = AppDataSource.getRepository(Event);
-      const attendRepo = AppDataSource.getRepository(Attendance);
-
       // Create the event record
-      const event = eventRepo.create({
+      let event = store.events.save({
         name: eventName,
         eventDate: eventDate ? new Date(eventDate) : null,
         csvFilename: req.file.originalname,
         uploadedBy: admin.id,
         attendeeCount: 0,
       });
-      await eventRepo.save(event);
 
       let newUsers = 0;
       let returningUsers = 0;
@@ -109,29 +102,26 @@ router.post(
       const emailPromises: Promise<void>[] = [];
 
       for (const attendee of attendees) {
-        let user = await userRepo.findOne({ where: { email: attendee.email } });
+        let user = store.users.findByEmail(attendee.email);
         const isNew = !user;
 
         if (!user) {
-          user = userRepo.create({
+          user = store.users.save({
             email: attendee.email,
             name: attendee.name,
             points: 0,
             isAdmin: false,
           });
-          await userRepo.save(user);
           newUsers++;
         } else {
           returningUsers++;
         }
 
         // Upsert attendance (idempotent on re-upload)
-        let attendance = await attendRepo.findOne({
-          where: { userId: user.id, eventId: event.id },
-        });
+        let attendance = store.attendances.findByUserAndEvent(user.id, event.id);
 
         if (!attendance) {
-          attendance = attendRepo.create({
+          attendance = store.attendances.save({
             userId: user.id,
             eventId: event.id,
             checkedIn: attendee.checkedIn,
@@ -141,19 +131,15 @@ router.post(
 
         // Award 1 point per verified check-in (only once per event)
         if (attendee.checkedIn && !attendance.checkedIn) {
-          attendance.checkedIn = true;
-          attendance.pointsAwarded = 1;
-          user.points += 1;
-          await userRepo.save(user);
+          attendance = store.attendances.save({ ...attendance, checkedIn: true, pointsAwarded: 1 });
+          user = store.users.save({ ...user, points: user.points + 1 });
           checkedInCount++;
           await invalidateCachedUser(user.id);
         } else if (attendee.checkedIn) {
           checkedInCount++;
         }
 
-        await attendRepo.save(attendance);
-
-        // Send email asynchronously
+        // Send email asynchronously (skipped in dev since magic-link returns URL directly)
         const capturedUser = user;
         const capturedIsNew = isNew;
         emailPromises.push(
@@ -176,8 +162,7 @@ router.post(
       }
 
       // Update event attendee count
-      event.attendeeCount = attendees.length;
-      await eventRepo.save(event);
+      event = store.events.save({ ...event, attendeeCount: attendees.length });
 
       // Invalidate leaderboard cache
       await invalidateCachedLeaderboard();
