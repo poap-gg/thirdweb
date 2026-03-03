@@ -2,9 +2,11 @@ import { useState, FormEvent } from 'react';
 import type { NextPage } from 'next';
 import Head from 'next/head';
 import Link from 'next/link';
+import { useRouter } from 'next/router';
 import { api, ApiError } from '../lib/api';
 
 const Home: NextPage = () => {
+  const router = useRouter();
   const [email, setEmail] = useState('');
   const [status, setStatus] = useState<'idle' | 'loading' | 'sent' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
@@ -14,7 +16,14 @@ const Home: NextPage = () => {
     setStatus('loading');
     setErrorMsg('');
     try {
-      await api.requestMagicLink(email.trim());
+      const result = await api.requestMagicLink(email.trim());
+      // MVP: backend returns verifyUrl directly — sign in immediately, no inbox needed
+      if (result.verifyUrl) {
+        const token = new URL(result.verifyUrl).searchParams.get('token') ?? '';
+        await api.verifyToken(token);
+        router.replace('/dashboard');
+        return;
+      }
       setStatus('sent');
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : 'Something went wrong. Please try again.';
@@ -92,7 +101,7 @@ const Home: NextPage = () => {
             <>
               <h2 style={{ fontSize: '20px', fontWeight: 700, marginBottom: '6px' }}>Sign in</h2>
               <p style={{ color: 'var(--color-text-muted)', fontSize: '14px', marginBottom: '20px' }}>
-                Enter your email to receive a magic sign-in link.
+                Enter your email to sign in instantly.
               </p>
               <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
                 <div>
@@ -113,7 +122,7 @@ const Home: NextPage = () => {
                   disabled={status === 'loading' || !email}
                   style={{ width: '100%' }}
                 >
-                  {status === 'loading' ? 'Sending…' : 'Send sign-in link'}
+                  {status === 'loading' ? 'Signing in…' : 'Sign in'}
                 </button>
               </form>
             </>

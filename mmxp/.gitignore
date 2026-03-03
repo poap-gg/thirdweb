@@ -4,3 +4,7 @@ dist/
 .env
 *.env.local
 *.log
+
+# Override root-level lib/ ignore for this subtree
+!**/lib/
+!**/lib/**
